@@ -7,7 +7,15 @@ from typing import BinaryIO, Callable, TypeVar
 import dropbox
 from dropbox import Dropbox
 from dropbox.exceptions import ApiError, AuthError, InternalServerError, RateLimitError
-from dropbox.files import CommitInfo, FileMetadata, FolderMetadata, UploadSessionCursor, WriteMode
+from dropbox.files import (
+    CommitInfo,
+    DeleteError,
+    FileMetadata,
+    FolderMetadata,
+    GetMetadataError,
+    UploadSessionCursor,
+    WriteMode,
+)
 from requests.exceptions import ConnectionError as RequestConnectionError
 from requests.exceptions import Timeout as RequestTimeout
 
@@ -38,6 +46,11 @@ def create_client(app_key: str, refresh_token: str) -> Dropbox:
 
 
 def _is_not_found(error: ApiError) -> bool:
+    detail = getattr(error, "error", None)
+    if isinstance(detail, GetMetadataError) and detail.is_path():
+        return detail.get_path().is_not_found()
+    if isinstance(detail, DeleteError) and detail.is_path_lookup():
+        return detail.get_path_lookup().is_not_found()
     summary = getattr(error, "error_summary", "") or ""
     return summary.startswith(("path/not_found", "path_lookup/not_found"))
 

@@ -6,10 +6,10 @@ import pytest
 
 import dropbox_mirror.dropbox_store as adapter
 from dropbox import DropboxOAuth2FlowNoRedirect
-from dropbox.exceptions import RateLimitError
-from dropbox.files import WriteMode
+from dropbox.exceptions import ApiError, RateLimitError
+from dropbox.files import DeleteError, GetMetadataError, ListFolderError, LookupError, WriteMode
 from dropbox_mirror.dropbox_store import DropboxStore, create_client
-from dropbox_mirror.mirror import RemoteError, RemoteNotFound, RetryableRemoteError
+from dropbox_mirror.mirror import RemoteError, RemoteNotFound, RetryableRemoteError, mirror_job
 
 
 class FakeFile:
@@ -36,6 +36,69 @@ class FakePagedClient:
     def files_list_folder_continue(self, cursor):
         self.continues += 1
         return SimpleNamespace(entries=[FakeFile("/dest/two")], cursor="end", has_more=False)
+
+
+def test_missing_destination_is_created_and_uploaded(tmp_path, make_job, monkeypatch):
+    monkeypatch.setattr(adapter, "FolderMetadata", FakeFolder)
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "notes.txt").write_bytes(b"notes")
+
+    class Client:
+        def __init__(self):
+            self.folders = set()
+            self.uploads = {}
+
+        def files_get_metadata(self, path):
+            if path not in self.folders:
+                raise ApiError("request", GetMetadataError.path(LookupError.not_found), None, None)
+            return FakeFolder()
+
+        def files_create_folder_v2(self, path):
+            self.folders.add(path)
+
+        def files_upload(self, content, path, **kwargs):
+            self.uploads[path] = content
+
+    client = Client()
+    result = mirror_job(make_job(source, destination="/documents"), DropboxStore(client))
+
+    assert result.outcome == "success"
+    assert client.folders == {"/documents"}
+    assert client.uploads == {"/documents/notes.txt": b"notes"}
+
+
+def test_metadata_other_lookup_error_is_not_treated_as_missing():
+    class Client:
+        def files_get_metadata(self, path):
+            raise ApiError("request", GetMetadataError.path(LookupError.not_folder), None, None)
+
+    with pytest.raises(RemoteError) as error:
+        DropboxStore(Client()).list_tree("/documents")
+    assert not isinstance(error.value, RemoteNotFound)
+
+
+def test_folder_listing_failure_does_not_become_empty_inventory(monkeypatch):
+    monkeypatch.setattr(adapter, "FolderMetadata", FakeFolder)
+
+    class Client:
+        def files_get_metadata(self, path):
+            return FakeFolder()
+
+        def files_list_folder(self, path, **kwargs):
+            raise ApiError("request", ListFolderError.path(LookupError.not_found), None, None)
+
+    with pytest.raises(RemoteError):
+        DropboxStore(Client()).list_tree("/documents")
+
+
+def test_delete_missing_path_uses_sdk_lookup_error():
+    class Client:
+        def files_delete_v2(self, path):
+            raise ApiError("request", DeleteError.path_lookup(LookupError.not_found), None, None)
+
+    with pytest.raises(RemoteNotFound):
+        DropboxStore(Client()).delete("/documents/old.txt")
 
 
 def test_list_tree_reads_all_pages(monkeypatch):
