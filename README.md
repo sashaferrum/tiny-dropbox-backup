@@ -121,15 +121,22 @@ source .venv/bin/activate
 # Copy the example configuration
 cp config.example.ini ~/.dropbox-mirror/config.ini
 
-# Edit the configuration with your settings
+# Edit the app key, source paths, and absolute credentials_file, log_file,
+# and lock_file paths so they are writable by your user
 nano ~/.dropbox-mirror/config.ini
 
 # Authorize with Dropbox (first time only, interactive)
-dropbox-mirror auth
+dropbox-mirror --config "$HOME/.dropbox-mirror/config.ini" auth
 
-# Start the application (via systemd wrapper script)
-./scripts/start.sh
+# Start the application in the foreground
+dropbox-mirror --config "$HOME/.dropbox-mirror/config.ini" run
 ```
+
+The example's `/var/lib` and `/var/log` paths normally require system setup;
+for a foreground run, replace them with writable absolute paths under your home
+directory. The CLI defaults to `/etc/dropbox-mirror/config.ini` when `--config`
+is omitted. To run as a service, follow the separate systemd setup below; the
+wrapper scripts only control an already installed service.
 
 For development and tests:
 
@@ -160,7 +167,7 @@ network access.
 5. From an SSH terminal on the server, run:
 
    ```bash
-   .venv/bin/dropbox-mirror --config /etc/dropbox-mirror/config.ini auth
+   .venv/bin/dropbox-mirror --config "$HOME/.dropbox-mirror/config.ini" auth
    ```
 
    Open the printed URL in a browser on any computer, approve the app, and
@@ -307,8 +314,13 @@ sudo useradd --system --create-home --home-dir /var/lib/dropbox-mirror \
 sudo install -d -o dropbox-mirror -g dropbox-mirror -m 0700 /var/lib/dropbox-mirror
 sudo install -d -o dropbox-mirror -g dropbox-mirror -m 0750 /var/log/dropbox-mirror
 sudo install -d -o root -g dropbox-mirror -m 0750 /etc/dropbox-mirror
-sudo install -o root -g dropbox-mirror -m 0640 config.ini /etc/dropbox-mirror/config.ini
+sudo install -o root -g dropbox-mirror -m 0640 \
+  "$HOME/.dropbox-mirror/config.ini" /etc/dropbox-mirror/config.ini
 ```
+
+Before installing the configuration, adjust its credentials, log, lock, and
+source paths for the service user. The credentials used by the service must be
+created by authorizing as that user, as shown below.
 
 The service template is [`systemd/dropbox-mirror@.service`](systemd/dropbox-mirror@.service).
 Replace `/opt/tiny-dropbox-backup` and `/etc/dropbox-mirror/config.ini` in it
