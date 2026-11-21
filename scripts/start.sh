@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SERVICE_NAME="${SERVICE_NAME:-dropbox-mirror@dropbox-mirror.service}"
+source "$(dirname "$(realpath "$0")")/common.sh"
 sudo systemctl start "$SERVICE_NAME"

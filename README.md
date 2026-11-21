@@ -80,63 +80,46 @@ safely and skips cleanup rather than claiming success.
 ## Installation
 
 Install Python 3.11+, its venv support, Git, `tzdata`, and systemd on Ubuntu.
-Clone the project:
+Run the following as the ordinary user whose files will be backed up; the
+installer uses `sudo` to configure the system service:
 
 ```bash
 sudo apt install python3.11 python3.11-venv git tzdata
 git clone <repository-url> tiny-dropbox-backup
 cd tiny-dropbox-backup
-chmod +x install.sh
-./install.sh
+bash install.sh
 ```
 
 The installer automatically:
-- Creates a Python virtual environment
-- Installs the package and dependencies
-- Creates the `~/.dropbox-mirror` credentials directory with secure permissions
-- Makes wrapper scripts executable
+- Creates or reuses `.venv` and installs the package and dependencies.
+- Creates `~/.dropbox-mirror` with owner-only permissions and copies the example
+  to `~/.dropbox-mirror/config.ini` only if the configuration does not exist.
+- Installs and enables a systemd service for the current user. It does not
+  start the service: first configure and authorize the application.
+- Makes the control and uninstall scripts executable.
 
-### Manual installation (alternative)
-
-If you prefer to install without the script:
-
-```bash
-python3.11 -m venv .venv
-. .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install .
-mkdir -p ~/.dropbox-mirror
-chmod 700 ~/.dropbox-mirror
-chmod +x scripts/start.sh scripts/stop.sh scripts/restart.sh
-```
-
-### Quick start after installation
+### Configure, authorize, and start
 
 After running `./install.sh`, configure and start the application:
 
 ```bash
-# Activate the virtual environment (if not already active)
-source .venv/bin/activate
-
-# Copy the example configuration
-cp config.example.ini ~/.dropbox-mirror/config.ini
-
-# Edit the app key, source paths, and absolute credentials_file, log_file,
-# and lock_file paths so they are writable by your user
+# Set the app key, source paths, and writable absolute state and log paths
 nano ~/.dropbox-mirror/config.ini
 
 # Authorize with Dropbox (first time only, interactive)
-dropbox-mirror --config "$HOME/.dropbox-mirror/config.ini" auth
+./scripts/auth.sh
 
-# Start the application in the foreground
-dropbox-mirror --config "$HOME/.dropbox-mirror/config.ini" run
+# Start the background service
+./scripts/start.sh
 ```
 
-The example's `/var/lib` and `/var/log` paths normally require system setup;
-for a foreground run, replace them with writable absolute paths under your home
-directory. The CLI defaults to `/etc/dropbox-mirror/config.ini` when `--config`
-is omitted. To run as a service, follow the separate systemd setup below; the
-wrapper scripts only control an already installed service.
+Replace the example's `/home/admin` and `/home/example` paths with paths
+appropriate for your account. The service runs as that account, so the sources
+must be readable and the credential, log, and lock paths writable by it.
+The installed service and `auth.sh` both use `~/.dropbox-mirror/config.ini`;
+the CLI itself defaults to `/etc/dropbox-mirror/config.ini` when `--config` is
+omitted. A reboot after installation will attempt to start the enabled service,
+so complete configuration and authorization first.
 
 For development and tests:
 
@@ -161,13 +144,13 @@ network access.
 3. Apply the permission changes. Copy the app key from the app's Settings tab
    into `[dropbox] app_key` in your configuration. No client secret or redirect
    URI is needed for this PKCE no-redirect flow.
-4. Create your installation-specific INI file outside the repository. Start
-   from [`config.example.ini`](config.example.ini) and update all local paths,
-   the app key, time zone, and jobs.
+4. Edit the installed `~/.dropbox-mirror/config.ini`, updating all local paths,
+   the app key, time zone, and jobs. It is copied from
+   [`config.example.ini`](config.example.ini) by the installer.
 5. From an SSH terminal on the server, run:
 
    ```bash
-   .venv/bin/dropbox-mirror --config "$HOME/.dropbox-mirror/config.ini" auth
+   ./scripts/auth.sh
    ```
 
    Open the printed URL in a browser on any computer, approve the app, and
@@ -179,7 +162,8 @@ network access.
    a protected parent directory, and owner-only file permissions (0600 on
    Linux). Keep the file private and do not commit it. The SDK refreshes the
    access token automatically using the refresh token. If approval is revoked,
-   run `auth` again as the service user.
+   stop the service and run `./scripts/auth.sh` again as the installing user,
+   then start the service again. Authorization and the service use the same lock.
 
 With App Folder access, every configured Dropbox path is relative to the app's
 own folder under `/apps` in the user's Dropbox. For example, destination
@@ -201,9 +185,9 @@ INI interpolation is disabled, so percent signs are literal.
 ```ini
 [general]
 timezone = Europe/Moscow
-credentials_file = /var/lib/dropbox-mirror/credentials.json
-log_file = /var/log/dropbox-mirror/mirror.log
-lock_file = /var/lib/dropbox-mirror/process.lock
+credentials_file = /home/admin/.dropbox-mirror/credentials.json
+log_file = /home/admin/.dropbox-mirror/mirror.log
+lock_file = /home/admin/.dropbox-mirror/process.lock
 
 [dropbox]
 app_key = YOUR_DROPBOX_APP_KEY
@@ -304,40 +288,15 @@ run; further triggers while it is running or pending are dropped.
 
 ## systemd service
 
-Create a dedicated ordinary user and writable state/log directories. For
-example, replace `dropbox-mirror` with your chosen service account and adjust
-all installation paths to match your clone:
+The installer renders [`systemd/dropbox-mirror@.service`](systemd/dropbox-mirror@.service)
+for the current user and installation directory and enables it at boot. Its
+name is `tiny-dropbox-backup-<UID>.service`. Only one installation per user is
+supported; the installer refuses to replace a service owned by another clone.
+Keep the clone and virtual environment at their installed paths. To move them,
+uninstall first and run the installer from the new location.
 
-```bash
-sudo useradd --system --create-home --home-dir /var/lib/dropbox-mirror \
-  --shell /usr/sbin/nologin dropbox-mirror
-sudo install -d -o dropbox-mirror -g dropbox-mirror -m 0700 /var/lib/dropbox-mirror
-sudo install -d -o dropbox-mirror -g dropbox-mirror -m 0750 /var/log/dropbox-mirror
-sudo install -d -o root -g dropbox-mirror -m 0750 /etc/dropbox-mirror
-sudo install -o root -g dropbox-mirror -m 0640 \
-  "$HOME/.dropbox-mirror/config.ini" /etc/dropbox-mirror/config.ini
-```
-
-Before installing the configuration, adjust its credentials, log, lock, and
-source paths for the service user. The credentials used by the service must be
-created by authorizing as that user, as shown below.
-
-The service template is [`systemd/dropbox-mirror@.service`](systemd/dropbox-mirror@.service).
-Replace `/opt/tiny-dropbox-backup` and `/etc/dropbox-mirror/config.ini` in it
-with absolute installation paths, then install and authorize as the service
-user:
-
-```bash
-sudo install -m 0644 systemd/dropbox-mirror@.service \
-  /etc/systemd/system/dropbox-mirror@.service
-sudo -u dropbox-mirror /opt/tiny-dropbox-backup/.venv/bin/dropbox-mirror \
-  --config /etc/dropbox-mirror/config.ini auth
-sudo systemctl daemon-reload
-sudo systemctl enable --now dropbox-mirror@dropbox-mirror.service
-```
-
-The unit runs directly from the virtual environment as the named non-root
-account, starts after network-online, restarts on failure with a delay and
+The unit runs directly from the virtual environment as the installing
+non-root account, starts after network-online, restarts on failure with a delay and
 systemd start-rate limit, and handles SIGTERM. `TimeoutStopSec=infinity` is
 intentional: systemd will not kill the process after an arbitrary short stop
 timeout while it finishes its current file and bounded request retries. The
@@ -347,12 +306,18 @@ overall deadline. A host administrator can still force termination.
 
 The wrappers [`scripts/start.sh`](scripts/start.sh),
 [`scripts/stop.sh`](scripts/stop.sh), and
-[`scripts/restart.sh`](scripts/restart.sh) call `sudo systemctl`. Their default
-unit name is `dropbox-mirror@dropbox-mirror.service`; override it by setting
-`SERVICE_NAME`. No status wrapper is provided.
+[`scripts/restart.sh`](scripts/restart.sh) call `sudo systemctl` for the
+current user's service. Restart after changing the configuration. Check status
+with `sudo systemctl status "tiny-dropbox-backup-$(id -u).service"`.
 
-If needed, make the wrappers executable with
-`chmod +x scripts/start.sh scripts/stop.sh scripts/restart.sh`.
+## Uninstallation
+
+Run `./uninstall.sh` as the same user. It stops and disables the service,
+removes its unit, and removes `.venv` if the installer created it. If `.venv`
+already existed, only the application package is uninstalled; the environment
+and its dependencies are retained. The configuration, credentials, logs,
+local source files, Dropbox data, and repository are not deleted. Remove
+unneeded configuration and credentials manually after checking their paths.
 
 ## Logs and troubleshooting
 
@@ -394,7 +359,8 @@ pytest
 
 The tests use temporary local directories, a fake remote store, and injected
 clocks/sleep functions. They do not authenticate with Dropbox or access a real
-account.
+account. On Linux, run `bash tests/test_install_scripts.sh` to exercise the
+installer and uninstaller with mocked system commands.
 
 ## License
 

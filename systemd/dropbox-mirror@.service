@@ -1,5 +1,5 @@
 [Unit]
-Description=Tiny Dropbox Mirror for %i
+Description=Tiny Dropbox Backup
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=5min
@@ -7,19 +7,15 @@ StartLimitBurst=3
 
 [Service]
 Type=simple
-User=%i
-Group=%i
-WorkingDirectory=/opt/tiny-dropbox-backup
-ExecStart=/opt/tiny-dropbox-backup/.venv/bin/dropbox-mirror --config /etc/dropbox-mirror/config.ini run
+User=@USER_ID@
+ExecStart="@EXECUTABLE@" --config "@CONFIG_FILE@" run
 Restart=on-failure
 RestartSec=10s
 KillSignal=SIGTERM
 KillMode=mixed
 TimeoutStopSec=infinity
 NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/var/lib/dropbox-mirror /var/log/dropbox-mirror
+ProtectSystem=full
 
 [Install]
 WantedBy=multi-user.target
